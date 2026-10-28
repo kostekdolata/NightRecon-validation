@@ -22,10 +22,12 @@ Do not substitute the outer handoff ZIP: the blob must contain the inner `candid
 
 ## Validation
 
-Nine Windows jobs cover Python 3.11/3.14 full suites, Red distribution and lifecycle, White distribution, and the Python 3.11 installer lifecycle. Main jobs require 1,580 total tests, including 112 controller tests; exact platform skips are recorded separately. Every role checks source integrity before and after execution, syntax and dependencies. Reports are uploaded as validation evidence. Installer artifacts are not published.
+Nine Windows jobs and eight Linux jobs cover Python 3.11/3.14 full suites, Red distribution and lifecycle, White distribution, and the Python 3.11 installer lifecycle. Main jobs require 1,580 total tests, including 112 controller tests; exact platform skips are recorded separately. Every role checks source integrity before and after execution, syntax and dependencies. Reports are uploaded as validation evidence. Installer artifacts are not published.
 
-The workflow has read-only repository permissions, disables persisted checkout credentials, and uses GitHub-hosted disposable Windows runners. Do not add publishing secrets or run against external security targets. Repository administrators must enable Actions if disabled by account policy. Standard action versions follow existing NightRecon CI; review dependency trust before dispatch.
+The workflow has read-only repository permissions, disables persisted checkout credentials, and uses GitHub-hosted disposable Windows and Ubuntu runners. Do not add publishing secrets or run against external security targets. Repository administrators must enable Actions if disabled by account policy. Standard action versions follow existing NightRecon CI; review dependency trust before dispatch.
 
 ## Completion gate
 
 A workflow installation or green bootstrap review is not candidate validation. Only actual successful reports from all nine jobs, with matching candidate digests, satisfy the Windows checkpoint. Missing reports, unexpected skips, source changes and failed jobs block the checkpoint. Any source repair requires a new frozen candidate and complete Linux/Windows revalidation.
+
+Linux distribution and lifecycle checks require the sudo-capable Ubuntu runner used by project CI. The local Codex environment has no sudo; do not bypass privilege checks. Both OS families use the same unchanged frozen candidate, hash checks and manual dispatch inputs.
