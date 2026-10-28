@@ -1,0 +1,283 @@
+name: NightRecon immutable candidate Windows validation
+'on':
+  workflow_dispatch:
+    inputs:
+      blob_sha:
+        description: Public NightRecon Git blob containing the verified ZIP
+        required: true
+        type: string
+      archive_sha256:
+        description: Reviewed candidate ZIP SHA-256
+        required: true
+        type: string
+      manifest_sha256:
+        description: Reviewed manifest SHA-256
+        required: true
+        type: string
+      candidate_digest:
+        description: Reviewed source-content digest
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: nightrecon-controller-checkpoint
+  cancel-in-progress: false
+jobs:
+  windows:
+    if: ${{ github.actor == 'kostekdolata' && github.event_name == 'workflow_dispatch' }}
+    name: ${{ matrix.name }}
+    runs-on: windows-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - python: '3.11'
+          role: test
+          name: Python 3.11 on windows-latest
+        - python: '3.11'
+          role: red-distribution
+          name: Red Night distribution 3.11 on windows-latest
+        - python: '3.11'
+          role: red-lifecycle
+          name: Red Night lifecycle 3.11 on windows-latest
+        - python: '3.11'
+          role: white-distribution
+          name: White Night distribution 3.11 on windows-latest
+        - python: '3.14'
+          role: test
+          name: Python 3.14 on windows-latest
+        - python: '3.14'
+          role: red-distribution
+          name: Red Night distribution 3.14 on windows-latest
+        - python: '3.14'
+          role: red-lifecycle
+          name: Red Night lifecycle 3.14 on windows-latest
+        - python: '3.14'
+          role: white-distribution
+          name: White Night distribution 3.14 on windows-latest
+        - python: '3.11'
+          role: installer
+          name: Build and exercise Windows installer
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      BLOB_SHA: ${{ inputs.blob_sha }}
+      ARCHIVE_SHA256: ${{ inputs.archive_sha256 }}
+      MANIFEST_SHA256: ${{ inputs.manifest_sha256 }}
+      CANDIDATE_DIGEST: ${{ inputs.candidate_digest }}
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        path: trusted
+        persist-credentials: false
+    - uses: actions/setup-python@v7
+      with:
+        python-version: ${{ matrix.python }}
+    - name: Verify and extract frozen source
+      shell: pwsh
+      run: 'python trusted/verify_candidate.py --archive candidate.zip --archive-sha256 "$env:ARCHIVE_SHA256" --manifest-sha256
+        "$env:MANIFEST_SHA256" --candidate-digest "$env:CANDIDATE_DIGEST" --destination candidate --blob-sha "$env:BLOB_SHA"
+        --report reports/integrity-before.json
+
+        if ($LASTEXITCODE -ne 0) { throw "Native validation failed: $LASTEXITCODE" }'
+    - name: Save verified manifest
+      shell: pwsh
+      run: 'python -c "import zipfile; from pathlib import Path; z=zipfile.ZipFile(''candidate.zip''); Path(''candidate-manifest.json'').write_bytes(z.read(''.candidate-manifest.json''))"
+
+        if ($LASTEXITCODE -ne 0) { throw "Native validation failed: $LASTEXITCODE" }'
+    - name: Prepare isolated build dependencies
+      shell: pwsh
+      run: 'python -m pip install --upgrade pip setuptools wheel "cryptography>=50.0.1,<51"
+
+        if ($LASTEXITCODE -ne 0) { throw "Native validation failed: $LASTEXITCODE" }'
+    - name: Install main test packages
+      if: matrix.role == 'test'
+      working-directory: candidate
+      shell: pwsh
+      run: 'python -m pip install -e ./packages/shared-core -e ./packages/red-engine -e ./packages/red-night -e ./packages/white-engine
+        -e ./packages/white-night -e .
+
+        if ($LASTEXITCODE -ne 0) { throw "Native validation failed: $LASTEXITCODE" }'
+    - name: Run existing full suite entry point
+      if: matrix.role == 'test'
+      working-directory: candidate
+      shell: pwsh
+      run: 'python tests/run_tests.py
+
+        if ($LASTEXITCODE -ne 0) { throw "Native validation failed: $LASTEXITCODE" }'
+    - name: Record structured full/controller/package results
+      if: matrix.role == 'test'
+      shell: pwsh
+      run: 'python trusted/run_suite.py --source candidate --mode full --skip-policy trusted/expected-skips.json --output
+        reports/full.json
+
+        if ($LASTEXITCODE -ne 0) { throw "Native validation failed: $LASTEXITCODE" }
+
+        python trusted/run_suite.py --source candidate --mode controller --skip-policy trusted/expected-skips.json --output
+        reports/controller.json
+
+        if ($LASTEXITCODE -ne 0) { throw "Native validation failed: $LASTEXITCODE" }
+
+        python trusted/run_suite.py --source candidate --mode package --skip-policy trusted/expected-skips.json --output reports/package.json
+
+        if ($LASTEXITCODE -ne 0) { throw "Native validation failed: $LASTEXITCODE" }'
+    - name: Check installed launcher
+      if: matrix.role == 'test'
+      working-directory: candidate
+      shell: pwsh
+      run: 'python tests/red_night_package_smoke.py
+
+        if ($LASTEXITCODE -ne 0) { throw "Native validation failed: $LASTEXITCODE" }'
+    - name: red-distribution
+      if: matrix.role == 'red-distribution'
+      working-directory: candidate
+      shell: pwsh
+      run: 'python tests/red_night_distribution_smoke.py
+
+        if ($LASTEXITCODE -ne 0) { throw "Native validation failed: $LASTEXITCODE" }'
+    - name: red-lifecycle
+      if: matrix.role == 'red-lifecycle'
+      working-directory: candidate
+      shell: pwsh
+      run: 'python tests/red_night_lifecycle_smoke.py
+
+        if ($LASTEXITCODE -ne 0) { throw "Native validation failed: $LASTEXITCODE" }'
+    - name: white-distribution
+      if: matrix.role == 'white-distribution'
+      working-directory: candidate
+      shell: pwsh
+      run: 'python tests/white_night_distribution_smoke.py
+
+        if ($LASTEXITCODE -ne 0) { throw "Native validation failed: $LASTEXITCODE" }'
+    - name: Build installer
+      shell: pwsh
+      run: '.\installer\windows\build_installer.ps1 -Version "0.46.7" -SourceCommit "09707e49116b6021fa7bb695c1979aeb240b4fca"
+
+        '
+      if: matrix.role == 'installer'
+      working-directory: candidate
+    - name: Verify frozen deployment metadata
+      shell: pwsh
+      run: '$info = .\artifacts\windows-installer\bundle\RedNight\RedNight.exe --deployment-info | ConvertFrom-Json
+
+        if (-not $info.package_compatible) { throw "Frozen Red package set is incompatible" }
+
+        if ($info.operational) { throw "Deployment-info path must remain non-operational" }
+
+        if ($info.build.source_commit -ne "09707e49116b6021fa7bb695c1979aeb240b4fca") { throw "Build commit metadata mismatch"
+        }
+
+        '
+      if: matrix.role == 'installer'
+      working-directory: candidate
+    - name: Silent install, uninstall, preserve data, reinstall
+      shell: pwsh
+      run: '$installer = (Get-ChildItem .\artifacts\windows-installer\RedNight-0.46.7-Windows-x64-Setup.exe).FullName
+
+        $install = Start-Process -FilePath $installer -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -PassThru
+
+        if ($install.ExitCode -ne 0) { throw "Installer failed: $($install.ExitCode)" }
+
+
+        $app = Join-Path $env:LOCALAPPDATA "Programs\Red Night\RedNight.exe"
+
+        if (-not (Test-Path $app)) { throw "Installed executable missing" }
+
+        $info = & $app --deployment-info | ConvertFrom-Json
+
+        if (-not $info.package_compatible) { throw "Installed package set is incompatible" }
+
+
+        $selfTest = & $app --deployment-self-test | ConvertFrom-Json
+
+        if (-not $selfTest.passed) { throw "Installed deployment self-test failed" }
+
+        if ($selfTest.operational -or $selfTest.network_activity) { throw "Deployment self-test crossed its non-operational
+        boundary" }
+
+        if (-not $selfTest.encrypted_backup_verified -or -not $selfTest.encrypted_backup_restored) { throw "Encrypted backup/restore
+        self-test failed" }
+
+
+        $data = Join-Path $env:LOCALAPPDATA "NightRecon\RedNight"
+
+        $sentinel = Join-Path $data "workspaces\ci-preserve.txt"
+
+        "preserve-me" | Set-Content -Encoding UTF8 $sentinel
+
+
+        $uninstaller = Join-Path $env:LOCALAPPDATA "Programs\Red Night\unins000.exe"
+
+        $uninstall = Start-Process -FilePath $uninstaller -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait
+        -PassThru
+
+        if ($uninstall.ExitCode -ne 0) { throw "Uninstaller failed: $($uninstall.ExitCode)" }
+
+        if (Test-Path $app) { throw "Application binary survived uninstall" }
+
+        if (-not (Test-Path $sentinel)) { throw "User workspace data was removed" }
+
+
+        $reinstall = Start-Process -FilePath $installer -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait
+        -PassThru
+
+        if ($reinstall.ExitCode -ne 0) { throw "Reinstall failed: $($reinstall.ExitCode)" }
+
+        if (-not (Test-Path $app)) { throw "Executable missing after reinstall" }
+
+        if (-not (Test-Path $sentinel)) { throw "Workspace data not preserved across reinstall" }
+
+        & $app --deployment-info | Out-Host
+
+        $selfTestAfterReinstall = & $app --deployment-self-test | ConvertFrom-Json
+
+        if (-not $selfTestAfterReinstall.passed) { throw "Deployment self-test failed after reinstall" }
+
+        '
+      if: matrix.role == 'installer'
+      working-directory: candidate
+    - name: Validate release metadata
+      shell: pwsh
+      run: '$manifest = Get-Content .\artifacts\windows-installer\RedNight-0.46.7-manifest.json -Raw | ConvertFrom-Json
+
+        if ($manifest.source_commit -ne "09707e49116b6021fa7bb695c1979aeb240b4fca") { throw "Manifest commit mismatch" }
+
+        if (-not $manifest.installer.sha256) { throw "Installer SHA-256 missing" }
+
+        if (-not $manifest.sbom.sha256) { throw "SBOM SHA-256 missing" }
+
+        if ((Get-Content .\artifacts\windows-installer\SHA256SUMS.txt).Length -lt 1) { throw "SHA256SUMS missing" }
+
+        '
+      if: matrix.role == 'installer'
+      working-directory: candidate
+    - name: Dependency and source syntax checks
+      shell: pwsh
+      run: 'python -m pip check
+
+        if ($LASTEXITCODE -ne 0) { throw "Native validation failed: $LASTEXITCODE" }
+
+        python trusted/syntax_check.py candidate candidate-manifest.json
+
+        if ($LASTEXITCODE -ne 0) { throw "Native validation failed: $LASTEXITCODE" }'
+    - name: Verify tested source is unchanged
+      shell: pwsh
+      run: 'python trusted/verify_candidate.py --archive candidate.zip --archive-sha256 "$env:ARCHIVE_SHA256" --manifest-sha256
+        "$env:MANIFEST_SHA256" --candidate-digest "$env:CANDIDATE_DIGEST" --destination candidate --verify-only --report reports/integrity-after.json
+
+        if ($LASTEXITCODE -ne 0) { throw "Native validation failed: $LASTEXITCODE" }'
+    - name: Write candidate/job binding
+      shell: pwsh
+      run: 'New-Item -ItemType Directory -Force reports | Out-Null
+
+        @{ candidate_digest=$env:CANDIDATE_DIGEST; archive_sha256=$env:ARCHIVE_SHA256; manifest_sha256=$env:MANIFEST_SHA256;
+        role=''${{ matrix.role }}''; python=''${{ matrix.python }}''; run_url=''${{ github.server_url }}/${{ github.repository
+        }}/actions/runs/${{ github.run_id }}'' } | ConvertTo-Json | Set-Content reports/binding.json'
+    - uses: actions/upload-artifact@v6
+      if: always()
+      with:
+        name: checkpoint-${{ matrix.role }}-${{ matrix.python }}
+        path: reports/*.json
+        retention-days: 7
+        if-no-files-found: warn
